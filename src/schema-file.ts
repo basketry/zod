@@ -59,38 +59,38 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
           }
           yield `});`;
           break;
-        case 'Union':
-          const complexMembers = element.members.filter((m) => !m.isPrimitive);
+        case 'PrimitiveUnion':
+        case 'ComplexUnion':
+        case 'DiscriminatedUnion': {
+          const unionType =
+            element.kind === 'DiscriminatedUnion'
+              ? 'discriminatedUnion'
+              : 'union';
 
-          if (complexMembers.length === 1) {
+          if (element.members.length === 1) {
             // If there is only one member, just export the schema for that member
             yield `export const ${pascal(name)}Schema = ${pascal(
-              complexMembers[0].typeName.value,
+              element.members[0].typeName.value,
             )}Schema;`;
           } else {
-            if (element.discriminator) {
-              yield `export const ${pascal(
-                name,
-              )}Schema = ${z()}.discriminatedUnion('${camel(
-                element.discriminator.value,
-              )}', [`;
+            yield `export const ${pascal(name)}Schema = ${z()}.${unionType}([`;
+
+            if (element.kind === 'PrimitiveUnion') {
+              // TODO: implement primitive unions
+              yield `// Primitive unions are not yet supported`;
             } else {
-              yield `export const ${pascal(name)}Schema = ${z()}.union([`;
-            }
-
-            for (const member of element.members) {
-              if (member.isPrimitive) continue;
-
-              yield `${pascal(member.typeName.value)}Schema,`;
+              for (const member of element.members) {
+                yield `${pascal(member.typeName.value)}Schema,`;
+              }
             }
 
             yield `]);`;
           }
-
           break;
+        }
         case 'Enum':
           yield `export const ${pascal(name)}Schema = ${z()}.enum([`;
-          for (const member of element.values) {
+          for (const member of element.members) {
             yield `  '${member.content.value}',`;
           }
           yield `]);`;
@@ -116,7 +116,7 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
         );
         if (!httpParam) return false;
 
-        const location = httpParam?.in.value;
+        const location = httpParam?.location.value;
 
         return (
           location === 'header' || location === 'query' || location === 'path'
@@ -128,16 +128,15 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
 
     const schema: string[] = [];
 
-    if (member.isPrimitive) {
-      switch (member.typeName.value) {
-        case 'null':
-          schema.push(`${z()}.literal(null)`);
-          break;
+    if (member.value.kind === 'PrimitiveValue') {
+      switch (member.value.typeName.value) {
         case 'string': {
-          const enumRule = member.rules.find((r) => r.id === 'string-enum');
+          const enumRule = member.value.rules.find(
+            (r) => r.id === 'StringEnum',
+          );
 
-          if (member.constant) {
-            schema.push(`${z()}.literal('${member.constant.value}')`);
+          if (member.value.constant) {
+            schema.push(`${z()}.literal('${member.value.constant.value}')`);
           } else if (enumRule) {
             schema.push(
               `${z()}.enum(${enumRule.values
@@ -147,14 +146,14 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
           } else {
             schema.push(`${z()}.string()`);
 
-            const minLengthRule = member.rules.find(
-              (r) => r.id === 'string-min-length',
+            const minLengthRule = member.value.rules.find(
+              (r) => r.id === 'StringMinLength',
             );
-            const maxLengthRule = member.rules.find(
-              (r) => r.id === 'string-max-length',
+            const maxLengthRule = member.value.rules.find(
+              (r) => r.id === 'StringMaxLength',
             );
-            const patternRule = member.rules.find(
-              (r) => r.id === 'string-pattern',
+            const patternRule = member.value.rules.find(
+              (r) => r.id === 'StringPattern',
             );
 
             if (
@@ -184,25 +183,29 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
         case 'double': {
           const coerce = shouldCoerce() ? `.coerce` : '';
 
-          if (member.constant) {
+          if (member.value.constant) {
             // TODO: support literal coercion
-            schema.push(`${z()}.literal(${member.constant.value})`);
+            schema.push(`${z()}.literal(${member.value.constant.value})`);
           } else {
             schema.push(`${z()}${coerce}.number()`);
 
             if (
-              member.typeName.value === 'integer' ||
-              member.typeName.value === 'long'
+              member.value.typeName.value === 'integer' ||
+              member.value.typeName.value === 'long'
             ) {
               schema.push(`int()`);
             }
 
-            const gtRule = member.rules.find((r) => r.id === 'number-gt');
-            const gteRule = member.rules.find((r) => r.id === 'number-gte');
-            const ltRule = member.rules.find((r) => r.id === 'number-lt');
-            const lteRule = member.rules.find((r) => r.id === 'number-lte');
-            const multipleOfRule = member.rules.find(
-              (r) => r.id === 'number-multiple-of',
+            const gtRule = member.value.rules.find((r) => r.id === 'NumberGT');
+            const gteRule = member.value.rules.find(
+              (r) => r.id === 'NumberGTE',
+            );
+            const ltRule = member.value.rules.find((r) => r.id === 'NumberLT');
+            const lteRule = member.value.rules.find(
+              (r) => r.id === 'NumberLTE',
+            );
+            const multipleOfRule = member.value.rules.find(
+              (r) => r.id === 'NumberMultipleOf',
             );
 
             if (gtRule) {
@@ -231,9 +234,9 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
         case 'boolean': {
           const coerce = shouldCoerce() ? `.coerce` : '';
 
-          if (member.constant) {
+          if (member.value.constant) {
             // TODO: support literal coercion
-            schema.push(`${z()}.literal(${member.constant.value})`);
+            schema.push(`${z()}.literal(${member.value.constant.value})`);
           } else {
             schema.push(`${z()}${coerce}.boolean()`);
           }
@@ -251,18 +254,20 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
       }
     } else {
       // TODO: support recursive types
-      if (camel(member.typeName.value) === camel(parent.name)) {
-        schema.push(`${z()}.lazy(()=>${pascal(member.typeName.value)}Schema)`);
+      if (camel(member.value.typeName.value) === camel(parent.name)) {
+        schema.push(
+          `${z()}.lazy(()=>${pascal(member.value.typeName.value)}Schema)`,
+        );
       } else {
-        schema.push(`${pascal(member.typeName.value)}Schema`);
+        schema.push(`${pascal(member.value.typeName.value)}Schema`);
       }
     }
 
-    if (member.isArray) {
+    if (member.value.isArray) {
       schema.push(`array()`);
 
-      const minRule = member.rules.find((r) => r.id === 'array-min-items');
-      const maxRule = member.rules.find((r) => r.id === 'array-max-items');
+      const minRule = member.value.rules.find((r) => r.id === 'ArrayMinItems');
+      const maxRule = member.value.rules.find((r) => r.id === 'ArrayMaxItems');
       // TODO: support array-unique-items
 
       if (minRule) {
@@ -273,7 +278,7 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
       if (maxRule) schema.push(`max(${maxRule.max.value})`);
     }
 
-    if (!isRequired(member)) {
+    if (!isRequired(member.value)) {
       schema.push(`optional()`);
     }
 
@@ -301,18 +306,22 @@ function sort(iterable: Iterable<Schema>) {
       switch (schema.element.kind) {
         case 'Type':
           complexMembers = schema.element.properties
-            .filter((p) => !p.isPrimitive)
-            .map((p) => pascal(p.typeName.value));
+            .filter((p) => p.value.kind !== 'PrimitiveValue')
+            .map((p) => pascal(p.value.typeName.value));
           break;
         case 'Method':
           complexMembers = schema.element.parameters
-            .filter((p) => !p.isPrimitive)
-            .map((p) => pascal(p.typeName.value));
+            .filter((p) => p.value.kind !== 'PrimitiveValue')
+            .map((p) => pascal(p.value.typeName.value));
           break;
-        case 'Union':
-          complexMembers = schema.element.members
-            .filter((m) => !m.isPrimitive)
-            .map((m) => pascal(m.typeName.value));
+        case 'ComplexUnion':
+        case 'DiscriminatedUnion':
+          complexMembers = schema.element.members.map((m) =>
+            pascal(m.typeName.value),
+          );
+          break;
+        case 'PrimitiveUnion':
+          // Primitive unions never have complex members
           break;
         case 'Enum':
           // Enums never have complex members
