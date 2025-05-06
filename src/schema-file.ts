@@ -106,6 +106,8 @@ export class SchemaFile extends ModuleBuilder<NamespacedZodOptions> {
               element.mapProperties.value,
               schema,
             )})`;
+          } else {
+            yield `${z()}.any()`;
           }
 
           if (element.mapProperties) {
